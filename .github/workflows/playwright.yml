@@ -1,13 +1,17 @@
-name: Playwright Tests
+name: Playwright Scale Demo
 on:
   push:
     branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
 jobs:
-  test:
-    timeout-minutes: 60
+  # JOB 1: Run tests across 3 separate parallel VMs
+  playwright-tests:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # This creates a grid: Machine 1, Machine 2, and Machine 3
+        shardIndex: [1, 2, 3]
+        shardTotal: [3]
     steps:
     - uses: actions/checkout@v4
     - uses: actions/setup-node@v4
@@ -17,11 +21,49 @@ jobs:
       run: npm ci
     - name: Install Playwright Browsers
       run: npx playwright install --with-deps
+
+    # Playwright built-in sharding automatically divides your tests evenly
     - name: Run Playwright tests
-      run: npx playwright test
-    - uses: actions/upload-artifact@v4
+      run: npx playwright test --shard=${{ matrix.shardIndex }}/${{ matrix.shardTotal }}
+
+    # Upload the raw binary report data from this specific VM
+    - name: Upload Blob Report
       if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@v4
       with:
-        name: playwright-report
+        name: all-blob-reports
+        path: blob-report/
+        retention-days: 1
+
+
+  # JOB 2: Wait for all VMs to finish, then merge into 1 report
+  merge-reports:
+    if: ${{ !cancelled() }}
+    needs: playwright-tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: lts/*
+    - name: Install dependencies
+      run: npm ci
+
+    # Download all the pieces from the 3 separate machines
+    - name: Download all Blob Reports
+      uses: actions/download-artifact@v4
+      with:
+        name: all-blob-reports
+        path: all-blob-reports
+
+    # Merge them into a single human-readable HTML report
+    - name: Merge Reports
+      run: npx playwright merge-reports --reporter html ./all-blob-reports
+
+    # Upload the final single master report file
+    - name: Upload Final HTML Report
+      uses: actions/upload-artifact@v4
+      with:
+        name: final-playwright-report
         path: playwright-report/
-        retention-days: 30
+        retention-days: 7
